@@ -8,4 +8,4 @@ def query_llm(prompt):
     return response["message"]["content"]
 
 # Example usage:
-print(query_llm("Explain mitochondria in simple terms."))
+print(query_llm("Explain mitochondria in simple terms.")) 
