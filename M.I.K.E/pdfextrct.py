@@ -3,14 +3,24 @@ import fitz  # PyMuPDF
 from PIL import Image
 from io import BytesIO
 import pdfplumber
+from langchain.text_splitter import RecursiveCharacterTextSplitter
 
-# Ensure KB folder exists
+# Ensure required folders exist
 kb_folder = "KB"
-os.makedirs(kb_folder, exist_ok=True)
+text_folder = "extracted_text"
+table_folder = "extracted_tables"
+image_folder = "extracted_images"
+chunk_folder = "split_chunks"
 
-def extract_text(file_path, output_folder="extracted_text"):
+os.makedirs(kb_folder, exist_ok=True)
+os.makedirs(text_folder, exist_ok=True)
+os.makedirs(table_folder, exist_ok=True)
+os.makedirs(image_folder, exist_ok=True)
+os.makedirs(chunk_folder, exist_ok=True)
+
+def extract_text(file_path):
+    """Extract text from a PDF."""
     try:
-        os.makedirs(output_folder, exist_ok=True)
         text = ""
         with pdfplumber.open(file_path) as pdf:
             for page in pdf.pages:
@@ -18,17 +28,18 @@ def extract_text(file_path, output_folder="extracted_text"):
                 if page_text:
                     text += page_text + "\n"
         
-        text_filename = os.path.join(output_folder, os.path.basename(file_path) + ".txt")
+        text_filename = os.path.join(text_folder, os.path.basename(file_path) + ".txt")
         with open(text_filename, "w", encoding="utf-8") as text_file:
             text_file.write(text)
         
-        return f"Extracted text saved to '{text_filename}'"
+        return text_filename, text
     except Exception as e:
-        return f"Error extracting text: {e}"
+        print(f"Error extracting text: {e}")
+        return None, ""
 
-def extract_tables(file_path, output_folder="extracted_tables"):
+def extract_tables(file_path):
+    """Extract tables from a PDF and save them as CSV."""
     try:
-        os.makedirs(output_folder, exist_ok=True)
         tables_data = []
         with pdfplumber.open(file_path) as pdf:
             for page in pdf.pages:
@@ -36,21 +47,21 @@ def extract_tables(file_path, output_folder="extracted_tables"):
                 if tables:
                     tables_data.extend(tables)
         
-        table_filename = os.path.join(output_folder, os.path.basename(file_path) + ".csv")
+        table_filename = os.path.join(table_folder, os.path.basename(file_path) + ".csv")
         with open(table_filename, "w", encoding="utf-8") as table_file:
             for table in tables_data:
                 for row in table:
-                    # Convert None values to empty strings
                     row = [str(cell) if cell is not None else "" for cell in row]
                     table_file.write(",".join(row) + "\n")
         
-        return f"Extracted tables saved to '{table_filename}'"
+        return table_filename, "\n".join([",".join(row) for table in tables_data for row in table])
     except Exception as e:
-        return f"Error extracting tables: {e}"
+        print(f"Error extracting tables: {e}")
+        return None, ""
 
-def extract_images(file_path, output_folder="extracted_images"):
+def extract_images(file_path):
+    """Extract images from a PDF and save them."""
     try:
-        os.makedirs(output_folder, exist_ok=True)
         doc = fitz.open(file_path)
         image_count = 0
         
@@ -60,29 +71,52 @@ def extract_images(file_path, output_folder="extracted_images"):
                 base_image = doc.extract_image(xref)
                 image_bytes = base_image["image"]
                 img = Image.open(BytesIO(image_bytes))
-                img_filename = f"{output_folder}/page_{page_num + 1}_img_{img_index + 1}.png"
+                img_filename = f"{image_folder}/page_{page_num + 1}_img_{img_index + 1}.png"
                 img.save(img_filename, "PNG")
                 image_count += 1
         
-        return f"Extracted {image_count} images to '{output_folder}'"
+        print(f"Extracted {image_count} images to '{image_folder}'")
     except Exception as e:
-        return f"Error extracting images: {e}"
- 
+        print(f"Error extracting images: {e}")
+
+def split_text_recursive(text, chunk_size=500, chunk_overlap=50):
+    """Split text using RecursiveCharacterTextSplitter."""
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size=chunk_size, 
+        chunk_overlap=chunk_overlap, 
+        separators=["\n\n", "\n", " ", ""]
+    )
+    return splitter.split_text(text)
+
 def process_pdf(file_path):
+    """Extract text, tables, images, and perform chunking automatically."""
     if os.path.exists(file_path):
         print(f"Processing {file_path}...")
-        text_result = extract_text(file_path)
-        print(text_result)
-        
-        table_result = extract_tables(file_path)
-        print(table_result)
-        
-        image_result = extract_images(file_path)
-        print(image_result)
+
+        text_filename, text_content = extract_text(file_path)
+        table_filename, table_content = extract_tables(file_path)
+        extract_images(file_path)
+
+        # Merge text and tables for chunking
+        full_content = text_content + "\n" + table_content
+        if full_content.strip():  # Only split if there's content
+            chunks = split_text_recursive(full_content)
+
+            # Save chunks
+            chunk_output_file = os.path.join(chunk_folder, os.path.basename(file_path) + "_chunks.txt")
+            with open(chunk_output_file, "w", encoding="utf-8") as file:
+                for i, chunk in enumerate(chunks):
+                    file.write(f"Chunk {i+1}:\n{chunk}\n\n")
+
+            print(f"Split chunks saved to '{chunk_output_file}'")
+        else:
+            print("No text or table data found to split.")
+
     else:
         print(f"File not found: {file_path}")
 
 def process_all_pdfs():
+    """Process all PDFs in the KB folder."""
     files = [f for f in os.listdir(kb_folder) if f.lower().endswith(".pdf")]
     if not files:
         print("No PDF files found in KB folder.")
@@ -92,6 +126,6 @@ def process_all_pdfs():
         file_path = os.path.join(kb_folder, file_name)
         process_pdf(file_path)
 
-# Automatically process all PDFs in KB folder
+# Automatically process all PDFs in KB folder when script runs
 if __name__ == "__main__":
     process_all_pdfs()
