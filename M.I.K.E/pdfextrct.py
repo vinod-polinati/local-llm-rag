@@ -3,6 +3,7 @@ import fitz  # PyMuPDF
 from PIL import Image
 from io import BytesIO
 import pdfplumber
+import subprocess
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 
 # Ensure required folders exist
@@ -116,7 +117,7 @@ def process_pdf(file_path):
         print(f"File not found: {file_path}")
 
 def process_all_pdfs():
-    """Process all PDFs in the KB folder."""
+    """Process all PDFs in the KB folder and trigger encoding after chunking."""
     files = [f for f in os.listdir(kb_folder) if f.lower().endswith(".pdf")]
     if not files:
         print("No PDF files found in KB folder.")
@@ -126,6 +127,10 @@ def process_all_pdfs():
         file_path = os.path.join(kb_folder, file_name)
         process_pdf(file_path)
 
-# Automatically process all PDFs in KB folder when script runs
+    # Call encoding.py after processing PDFs
+    print("Starting embedding process...")
+    subprocess.Popen(["python", "encoding.py"])  # Runs encoding.py in the background
+
+# Automatically process PDFs when script runs
 if __name__ == "__main__":
     process_all_pdfs()

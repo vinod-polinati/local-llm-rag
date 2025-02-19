@@ -33,7 +33,7 @@ def call_pdf_extract(file_name):
         print("File not found in KB folder.")
 
 def clear_kb():
-    for folder in ["KB", "extracted_images", "extracted_text", "extracted_tables", "split_chunks"]:
+    for folder in ["KB", "extracted_images", "extracted_text", "extracted_tables", "split_chunks" , "embeddings"]:
         if os.path.exists(folder):
             shutil.rmtree(folder)
             print(f"{folder} and all extracted files deleted.")
