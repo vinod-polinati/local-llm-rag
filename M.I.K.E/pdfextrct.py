@@ -67,25 +67,21 @@ def extract_tables(file_path):
         print(f"Error extracting tables: {e}")
         return ""
 
-def extract_images(file_path):
-    """Extract images from a PDF and save them."""
+def extract_images(file_path, image_folder="extracted_images"):
+    """Extract images from a PDF using PyMuPDF and save them."""
     try:
+        os.makedirs(image_folder, exist_ok=True)
         doc = fitz.open(file_path)
-        image_count = 0
-        
         for page_num, page in enumerate(doc):
             for img_index, img in enumerate(page.get_images(full=True)):
                 xref = img[0]
                 base_image = doc.extract_image(xref)
                 image_bytes = base_image["image"]
                 img = Image.open(BytesIO(image_bytes))
-                img_filename = f"{image_folder}/page_{page_num + 1}_img_{img_index + 1}.png"
-                img.save(img_filename, "PNG")
-                image_count += 1
-        
-        print(f"Extracted {image_count} images to '{image_folder}'")
+                img.save(os.path.join(image_folder, f"{os.path.basename(file_path)}_page{page_num+1}_img{img_index+1}.png"), "PNG")
+                print(f"Saved image: {os.path.basename(file_path)}_page{page_num+1}_img{img_index+1}.png")
     except Exception as e:
-        print(f"Error extracting images: {e}")
+        print(f"Error extracting images from {file_path}: {e}")
 
 def split_text_recursive(text, chunk_size=500, chunk_overlap=50):
     """Split text using RecursiveCharacterTextSplitter."""
