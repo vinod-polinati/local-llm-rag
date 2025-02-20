@@ -53,6 +53,8 @@ def handle_convo():
         if user_input.lower() == "clear":
             context = ""
             clear_kb()
+            shutil.rmtree("KB")  # Remove the KB directory and its contents
+            os.makedirs("KB")  # Recreate the KB directory
             print("Memory and all extracted files cleared")
             continue
         
