@@ -1,2 +1,1 @@
-# progrees-done-week-by-week
-# under maintainence
+### doc qa using local llm 
