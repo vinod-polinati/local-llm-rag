@@ -1,8 +1,17 @@
-from langchain_ollama import OllamaLLM
-from langchain_core.prompts import ChatPromptTemplate
 import os
 import subprocess
 import shutil
+from langchain_ollama import OllamaLLM
+from langchain_core.prompts import ChatPromptTemplate
+
+def get_unique_filename(directory, filename):
+    base, ext = os.path.splitext(filename)
+    counter = 1
+    new_filename = filename
+    while os.path.exists(os.path.join(directory, new_filename)):
+        new_filename = f"{base}_{counter}{ext}"
+        counter += 1
+    return new_filename
 
 # Ensure KB folder exists
 os.makedirs("KB", exist_ok=True)
@@ -62,13 +71,14 @@ def handle_convo():
             file_path = input("Enter file path: ")
             if os.path.exists(file_path):
                 file_name = os.path.basename(file_path)
-                dest_path = os.path.join("KB", file_name)
+                unique_file_name = get_unique_filename("KB", file_name)
+                dest_path = os.path.join("KB", unique_file_name)
                 with open(file_path, "rb") as file:
                     content = file.read()
                 with open(dest_path, "wb") as storage:
                     storage.write(content)
-                print(f"File uploaded successfully to KB/{file_name}!")
-                call_pdf_extract(file_name)  # Call PDF extraction function
+                print(f"File uploaded successfully to KB/{unique_file_name}!")
+                call_pdf_extract(unique_file_name)  # Call PDF extraction function
             else:
                 print("File not found. Please try again.")
             continue
