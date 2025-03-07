@@ -18,12 +18,8 @@ chunk_folder = "split_chunks"
 embedding_folder = "data_embeddings"
 
 # Ensure required folders exist
-os.makedirs(kb_folder, exist_ok=True)
-os.makedirs(text_folder, exist_ok=True)
-os.makedirs(table_folder, exist_ok=True)
-os.makedirs(image_folder, exist_ok=True)
-os.makedirs(chunk_folder, exist_ok=True)
-os.makedirs(embedding_folder, exist_ok=True)
+for folder in [kb_folder, text_folder, table_folder, image_folder, chunk_folder, embedding_folder]:
+    os.makedirs(folder, exist_ok=True)
 
 # Initialize embedding model
 embedding_model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
@@ -41,6 +37,9 @@ def extract_text(file_path):
                 page_text = page.extract_text()
                 if page_text:
                     text += page_text + "\n"
+        text_filename = os.path.join(text_folder, os.path.basename(file_path) + ".txt")
+        with open(text_filename, "w", encoding="utf-8") as text_file:
+            text_file.write(text)
         return text
     except Exception as e:
         print(f"Error extracting text: {e}")
@@ -57,6 +56,9 @@ def extract_tables(file_path):
                     for table in tables:
                         table_text = "\n".join([" | ".join([str(cell) if cell is not None else "" for cell in row]) for row in table])
                         table_texts.append(f"Table from Page {page_num+1}:\n{table_text}\n")
+        table_filename = os.path.join(table_folder, os.path.basename(file_path) + ".txt")
+        with open(table_filename, "w", encoding="utf-8") as table_file:
+            table_file.write("\n".join(table_texts))
         return "\n".join(table_texts)
     except Exception as e:
         print(f"Error extracting tables: {e}")
@@ -92,36 +94,39 @@ def store_embeddings(file_name, embeddings):
     return embedding_file
 
 def process_pdf(file_path):
-    """Extract text, tables, images, merge text and tables, split into chunks, store embeddings, and save in FAISS."""
+    """Extract text, tables, images, split into chunks, store embeddings, and save in FAISS."""
     if os.path.exists(file_path):
         print(f"Processing {file_path}...")
         text_content = extract_text(file_path)
         table_content = extract_tables(file_path)
         extract_images(file_path)
-        
-        # Merge extracted text and tables
-        full_content = text_content + "\n" + table_content
-        
-        # Split into chunks
-        chunks = split_text_recursive(full_content)
-        
-        # Save merged chunks
-        chunk_file = os.path.join(chunk_folder, os.path.basename(file_path) + "_chunks.txt")
-        with open(chunk_file, "w", encoding="utf-8") as file:
-            for i, chunk in enumerate(chunks):
+
+        # Store chunks separately without merging text and tables
+        text_chunks = split_text_recursive(text_content)
+        table_chunks = split_text_recursive(table_content)
+
+        # Save chunked text files
+        text_chunk_file = os.path.join(chunk_folder, os.path.basename(file_path) + "_text_chunks.txt")
+        with open(text_chunk_file, "w", encoding="utf-8") as file:
+            for i, chunk in enumerate(text_chunks):
                 file.write(f"Chunk {i+1}:\n{chunk}\n\n")
         
-        # Generate embeddings
-        chunk_embeddings = embedding_model.encode(chunks, convert_to_numpy=True)
+        table_chunk_file = os.path.join(chunk_folder, os.path.basename(file_path) + "_table_chunks.txt")
+        with open(table_chunk_file, "w", encoding="utf-8") as file:
+            for i, chunk in enumerate(table_chunks):
+                file.write(f"Chunk {i+1}:\n{chunk}\n\n")
+        
+        # Generate embeddings only for text chunks
+        chunk_embeddings = embedding_model.encode(text_chunks, convert_to_numpy=True)
         
         # Store embeddings
         embedding_file = store_embeddings(os.path.basename(file_path), chunk_embeddings)
         print(f"Embeddings saved to {embedding_file}")
-        
+
         # Store in FAISS
         global index
         index.add(chunk_embeddings)
-        print(f"Stored {len(chunks)} chunks in FAISS.")
+        print(f"Stored {len(text_chunks)} text chunks in FAISS.")
     else:
         print(f"File not found: {file_path}")
 
