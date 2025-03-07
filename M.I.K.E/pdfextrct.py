@@ -104,16 +104,14 @@ def process_pdf(file_path):
         # Store chunks separately without merging text and tables
         text_chunks = split_text_recursive(text_content)
         table_chunks = split_text_recursive(table_content)
-
-        # Save chunked text files
-        text_chunk_file = os.path.join(chunk_folder, os.path.basename(file_path) + "_text_chunks.txt")
-        with open(text_chunk_file, "w", encoding="utf-8") as file:
-            for i, chunk in enumerate(text_chunks):
-                file.write(f"Chunk {i+1}:\n{chunk}\n\n")
         
-        table_chunk_file = os.path.join(chunk_folder, os.path.basename(file_path) + "_table_chunks.txt")
-        with open(table_chunk_file, "w", encoding="utf-8") as file:
-            for i, chunk in enumerate(table_chunks):
+        # Merge text and table chunks
+        all_chunks = text_chunks + table_chunks
+        
+        # Save merged chunked text files
+        merged_chunk_file = os.path.join(chunk_folder, os.path.basename(file_path) + "_merged_chunks.txt")
+        with open(merged_chunk_file, "w", encoding="utf-8") as file:
+            for i, chunk in enumerate(all_chunks):
                 file.write(f"Chunk {i+1}:\n{chunk}\n\n")
         
         # Generate embeddings only for text chunks
