@@ -7,7 +7,6 @@ from langchain.text_splitter import RecursiveCharacterTextSplitter
 from sentence_transformers import SentenceTransformer  # Use Sentence-Transformers model
 import faiss  # FAISS for vector storage
 import numpy as np
-import json
 
 # Define folders
 kb_folder = "KB"
@@ -100,18 +99,20 @@ def process_pdf(file_path):
         text_content = extract_text(file_path)
         table_content = extract_tables(file_path)
         extract_images(file_path)
-
+        
         # Store chunks separately without merging text and tables
         text_chunks = split_text_recursive(text_content)
         table_chunks = split_text_recursive(table_content)
         
-        # Merge text and table chunks
-        all_chunks = text_chunks + table_chunks
+        # Save chunked text files
+        text_chunk_file = os.path.join(chunk_folder, os.path.basename(file_path) + "_text_chunks.txt")
+        with open(text_chunk_file, "w", encoding="utf-8") as file:
+            for i, chunk in enumerate(text_chunks):
+                file.write(f"Chunk {i+1}:\n{chunk}\n\n")
         
-        # Save merged chunked text files
-        merged_chunk_file = os.path.join(chunk_folder, os.path.basename(file_path) + "_merged_chunks.txt")
-        with open(merged_chunk_file, "w", encoding="utf-8") as file:
-            for i, chunk in enumerate(all_chunks):
+        table_chunk_file = os.path.join(chunk_folder, os.path.basename(file_path) + "_table_chunks.txt")
+        with open(table_chunk_file, "w", encoding="utf-8") as file:
+            for i, chunk in enumerate(table_chunks):
                 file.write(f"Chunk {i+1}:\n{chunk}\n\n")
         
         # Generate embeddings only for text chunks
@@ -120,7 +121,7 @@ def process_pdf(file_path):
         # Store embeddings
         embedding_file = store_embeddings(os.path.basename(file_path), chunk_embeddings)
         print(f"Embeddings saved to {embedding_file}")
-
+        
         # Store in FAISS
         global index
         index.add(chunk_embeddings)
