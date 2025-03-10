@@ -1,0 +1,10 @@
+langchain 
+langchain_ollama 
+langchain-core 
+ollama 
+pdfplumber 
+pymupdf 
+pandas 
+pillow 
+numpy
+sentence-transformers
