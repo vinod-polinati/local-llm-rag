@@ -1,10 +1,43 @@
 import os
 import subprocess
 import shutil
+import numpy as np
+import faiss
 from langchain_ollama import OllamaLLM
 from langchain_core.prompts import ChatPromptTemplate
+from sentence_transformers import SentenceTransformer
+
+# Ensure KB folder exists
+os.makedirs("KB", exist_ok=True)
+
+# Initialize embedding model and FAISS index
+embedding_model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+dimension = 384
+faiss_index_path = "faiss_index.idx"
+
+# Load FAISS index if exists, otherwise create a new one
+if os.path.exists(faiss_index_path):
+    index = faiss.read_index(faiss_index_path)
+else:
+    index = faiss.IndexFlatL2(dimension)
+
+# Define the retrieval-based prompt template
+template = """ 
+Use the information below to answer the question.
+
+Context: {context}
+
+Question: {question}
+
+Answer:
+"""
+
+model = OllamaLLM(model='mistral')
+prompt = ChatPromptTemplate.from_template(template)
+chain = prompt | model 
 
 def get_unique_filename(directory, filename):
+    """Ensure unique filenames to avoid overwriting."""
     base, ext = os.path.splitext(filename)
     counter = 1
     new_filename = filename
@@ -13,25 +46,8 @@ def get_unique_filename(directory, filename):
         counter += 1
     return new_filename
 
-# Ensure KB folder exists
-os.makedirs("KB", exist_ok=True)
-
-template = """ 
-Answer question below
-
-Here is the conversation history: {context}
-
-Question: {question}
-
-Answer:
-
-"""    
-
-model = OllamaLLM(model='mistral')
-prompt = ChatPromptTemplate.from_template(template)
-chain = prompt | model 
-
 def call_pdf_extract(file_name):
+    """Calls the PDF extraction script to process and store embeddings."""
     script_path = "pdfextrct.py"
     file_path = os.path.join("KB", file_name)
     
@@ -41,15 +57,35 @@ def call_pdf_extract(file_name):
     else:
         print("File not found in KB folder.")
 
+def retrieve_context(query, top_k=3):
+    """Retrieve the most relevant chunks from FAISS."""
+    query_embedding = embedding_model.encode([query])
+    distances, indices = index.search(query_embedding, top_k)
+    
+    retrieved_chunks = []
+    for idx in indices[0]:
+        if idx != -1:  # Ensure valid index
+            chunk_path = f"split_chunks/chunk_{idx}.txt"
+            if os.path.exists(chunk_path):
+                with open(chunk_path, "r", encoding="utf-8") as file:
+                    retrieved_chunks.append(file.read())
+    
+    return "\n\n".join(retrieved_chunks)
+
 def clear_kb():
-    for folder in ["KB", "extracted_images", "extracted_text", "extracted_tables", "split_chunks" , "data_embeddings"]:
+    """Clears the KB and extracted files."""
+    for folder in ["KB", "extracted_images", "extracted_text", "extracted_tables", "split_chunks", "data_embeddings"]:
         if os.path.exists(folder):
             shutil.rmtree(folder)
             print(f"{folder} and all extracted files deleted.")
     os.makedirs("KB", exist_ok=True)
+    global index
+    index = faiss.IndexFlatL2(dimension)  # Reset FAISS index
+    if os.path.exists(faiss_index_path):
+        os.remove(faiss_index_path)
 
 def handle_convo():
-    context = ""
+    """Handles the chatbot's conversation loop."""
     print("Welcome to AI ChatBot, Type 'exit' to quit")
     
     while True:
@@ -60,10 +96,7 @@ def handle_convo():
             break
         
         if user_input.lower() == "clear":
-            context = ""
             clear_kb()
-            shutil.rmtree("KB")  # Remove the KB directory and its contents
-            os.makedirs("KB")  # Recreate the KB directory
             print("Memory and all extracted files cleared")
             continue
         
@@ -73,19 +106,22 @@ def handle_convo():
                 file_name = os.path.basename(file_path)
                 unique_file_name = get_unique_filename("KB", file_name)
                 dest_path = os.path.join("KB", unique_file_name)
-                with open(file_path, "rb") as file:
-                    content = file.read()
-                with open(dest_path, "wb") as storage:
-                    storage.write(content)
+                shutil.copy(file_path, dest_path)
                 print(f"File uploaded successfully to KB/{unique_file_name}!")
-                call_pdf_extract(unique_file_name)  # Call PDF extraction function
+                call_pdf_extract(unique_file_name)
             else:
                 print("File not found. Please try again.")
             continue
         
+        # Retrieve relevant context from FAISS
+        context = retrieve_context(user_input)
+        
+        # Generate response
         result = chain.invoke({"context": context, "question": user_input})
         print("AI: ", result)
-        context += f"\nUser: {user_input}\nAI : {result}"
-    
+
+        # Save FAISS index
+        faiss.write_index(index, faiss_index_path)
+
 if __name__ == "__main__":
     handle_convo()
