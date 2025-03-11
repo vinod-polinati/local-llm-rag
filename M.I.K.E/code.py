@@ -1,3 +1,7 @@
+# OLD CODE - DO NOT USE
+# This code is for reference only and is not used in the final implementation.
+
+'''
 import os
 import subprocess
 import shutil
@@ -125,3 +129,4 @@ def handle_convo():
 
 if __name__ == "__main__":
     handle_convo()
+'''
