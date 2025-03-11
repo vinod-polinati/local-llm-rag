@@ -4,7 +4,7 @@
 '''
 import os
 import subprocess
-import shutil
+import shuil
 import numpy as np
 import faiss
 from langchain_ollama import OllamaLLM
