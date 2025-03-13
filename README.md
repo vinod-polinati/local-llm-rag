@@ -1,4 +1,5 @@
-# local-llm-rag
+# Local AI-Powered Document Chatbot with FAISS & Mistral
+
 
 A local Retrieval-Augmented Generation (RAG) system using FAISS, Sentence Transformers, and Ollama's Mistral model for chatbot-style interactions with uploaded documents.
 
