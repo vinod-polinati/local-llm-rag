@@ -8,3 +8,4 @@ pandas
 pillow 
 numpy
 sentence-transformers
+faiss-cpu
