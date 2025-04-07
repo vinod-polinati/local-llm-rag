@@ -10,7 +10,7 @@ from sentence_transformers import SentenceTransformer
 # Ensure KB folder exists
 os.makedirs("KB", exist_ok=True)
 
-# Initialize embedding model and FAISS index
+# Initialize embeddsing model and FAISS index
 embedding_model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
 dimension = 384
 faiss_index_path = "faiss_index.idx"
