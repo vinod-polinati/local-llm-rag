@@ -2,6 +2,7 @@ langchain
 langchain_ollama 
 langchain-core 
 ollama 
+fitz
 pdfplumber 
 pymupdf 
 pandas 
@@ -9,3 +10,5 @@ pillow
 numpy
 sentence-transformers
 faiss-cpu
+streamlit
+streamlit-chat
