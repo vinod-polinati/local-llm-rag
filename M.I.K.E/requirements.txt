@@ -2,9 +2,8 @@ langchain
 langchain_ollama 
 langchain-core 
 ollama 
-fitz
 pdfplumber 
-pymupdf 
+PyMuPDF
 pandas 
 pillow 
 numpy
