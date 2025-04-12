@@ -11,3 +11,5 @@ sentence-transformers
 faiss-cpu
 streamlit
 streamlit-chat
+pdf2image
+pytesseract
