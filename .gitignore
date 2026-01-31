@@ -1,0 +1,43 @@
+# Virtual environments
+/venv/
+env/
+.venv/
+M.I.K.E/env/
+.env.example
+# IDE
+/.vscode/
+/.idea/
+
+# Environment variables (keep .env.example)
+.env
+.env.local
+.env.*.local
+
+# Logs
+logs/
+*.log
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Distribution
+build/
+dist/
+*.egg-info/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Sample/test PDF files
+*.pdf
+
+# Data files (optional - uncomment if you want to ignore)
+# KB/
+# split_chunks/
+# data_embeddings/
+# faiss_index.idx

@@ -1,0 +1,29 @@
+# Core LangChain
+langchain==1.2.7
+langchain-core==1.2.7
+langchain-ollama==1.0.1
+ollama==0.6.1
+
+# PDF Processing
+pdfplumber==0.11.9
+PyMuPDF==1.26.7
+pdf2image==1.17.0
+pytesseract==0.3.13
+
+# Data Processing
+pandas==2.3.3
+pillow==12.1.0
+numpy==2.4.1
+
+# Vector Store & Embeddings
+sentence-transformers==5.2.2
+faiss-cpu==1.13.2
+
+# Web UI
+streamlit==1.53.1
+streamlit-chat==0.1.1
+
+# Configuration & Validation
+pydantic==2.12.5
+pydantic-settings==2.8.1
+python-magic==0.4.27
