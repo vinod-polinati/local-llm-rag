@@ -1,0 +1,47 @@
+# M.I.K.E RAG System - Docker Compose
+# Runs the app with Ollama LLM backend
+
+services:
+  # Ollama LLM Backend
+  ollama:
+    image: ollama/ollama:latest
+    container_name: mike-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/version"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # M.I.K.E RAG Application
+  mike:
+    build: .
+    container_name: mike-rag
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./KB:/app/KB
+      - ./split_chunks:/app/split_chunks
+      - ./data_embeddings:/app/data_embeddings
+      - ./logs:/app/logs
+      - mike_index:/app/faiss_index
+    environment:
+      - OLLAMA_HOST=http://ollama:11434
+      - LLM_MODEL=mistral
+      - LOG_LEVEL=INFO
+    depends_on:
+      ollama:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  ollama_data:
+  mike_index:
+
+networks:
+  default:
+    name: mike-network

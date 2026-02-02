@@ -1,10 +1,11 @@
 """
 PDF extraction module for the M.I.K.E RAG system.
-Extracts text from PDFs (with OCR fallback), chunks it, generates embeddings,
-and stores them in FAISS.
+Extracts text from PDFs (with OCR fallback), uses semantic chunking,
+generates embeddings, and stores them in FAISS with BM25 index.
 """
 
 import os
+import re
 import sys
 
 import fitz  # PyMuPDF
@@ -16,6 +17,7 @@ from sentence_transformers import SentenceTransformer
 
 from config import settings
 from logger import logger
+from retriever import BM25Index
 
 
 def initialize_directories() -> None:
@@ -104,9 +106,80 @@ def extract_text_with_ocr(pdf_path: str) -> str:
     return full_text
 
 
-def chunk_text(text: str, chunk_size: int | None = None, overlap: int | None = None) -> list[str]:
+def semantic_chunk_text(text: str, target_size: int | None = None, overlap: int | None = None) -> list[str]:
     """
-    Split text into overlapping chunks.
+    Split text into semantically meaningful chunks based on sentences.
+    This produces better retrieval results than fixed-size chunking.
+
+    Args:
+        text: The text to chunk.
+        target_size: Target size for each chunk in characters.
+        overlap: Overlap between chunks in characters.
+
+    Returns:
+        List of text chunks.
+    """
+    if target_size is None:
+        target_size = settings.chunk_size
+    if overlap is None:
+        overlap = settings.chunk_overlap
+
+    if not text or not text.strip():
+        return []
+
+    # Split into sentences using regex
+    # Handles: periods, question marks, exclamation marks
+    # Preserves abbreviations like "Dr.", "Mr.", "e.g.", etc.
+    sentence_endings = re.compile(r'(?<=[.!?])\s+(?=[A-Z])')
+    sentences = sentence_endings.split(text)
+
+    # Clean up sentences
+    sentences = [s.strip() for s in sentences if s.strip()]
+
+    if not sentences:
+        return []
+
+    chunks = []
+    current_chunk = []
+    current_size = 0
+
+    for sentence in sentences:
+        sentence_size = len(sentence)
+
+        # If adding this sentence would exceed target, save current chunk
+        if current_size + sentence_size > target_size and current_chunk:
+            chunk_text = ' '.join(current_chunk)
+            chunks.append(chunk_text)
+
+            # Keep some sentences for overlap
+            overlap_size = 0
+            overlap_sentences = []
+            for s in reversed(current_chunk):
+                if overlap_size + len(s) <= overlap:
+                    overlap_sentences.insert(0, s)
+                    overlap_size += len(s)
+                else:
+                    break
+
+            current_chunk = overlap_sentences
+            current_size = sum(len(s) for s in current_chunk)
+
+        current_chunk.append(sentence)
+        current_size += sentence_size
+
+    # Don't forget the last chunk
+    if current_chunk:
+        chunk_text = ' '.join(current_chunk)
+        if chunk_text.strip():
+            chunks.append(chunk_text)
+
+    logger.debug(f"Semantic chunking: {len(sentences)} sentences -> {len(chunks)} chunks")
+    return chunks
+
+
+def fixed_chunk_text(text: str, chunk_size: int | None = None, overlap: int | None = None) -> list[str]:
+    """
+    Split text into fixed-size overlapping chunks (legacy method).
 
     Args:
         text: The text to chunk.
@@ -131,18 +204,34 @@ def chunk_text(text: str, chunk_size: int | None = None, overlap: int | None = N
         end = start + chunk_size
         chunk = text[start:end].strip()
 
-        if chunk:  # Only add non-empty chunks
+        if chunk:
             chunks.append(chunk)
 
         start += chunk_size - overlap
 
-    logger.debug(f"Created {len(chunks)} chunks from {len(text)} chars")
+    logger.debug(f"Fixed chunking: {len(text)} chars -> {len(chunks)} chunks")
     return chunks
+
+
+def chunk_text(text: str) -> list[str]:
+    """
+    Chunk text using the configured method.
+
+    Args:
+        text: The text to chunk.
+
+    Returns:
+        List of text chunks.
+    """
+    if settings.use_semantic_chunking:
+        return semantic_chunk_text(text)
+    else:
+        return fixed_chunk_text(text)
 
 
 def process_pdf(pdf_path: str) -> bool:
     """
-    Process a PDF: extract text, chunk, embed, and store in FAISS.
+    Process a PDF: extract text, chunk, embed, and store in FAISS + BM25.
 
     Args:
         pdf_path: Path to the PDF file.
@@ -161,7 +250,11 @@ def process_pdf(pdf_path: str) -> bool:
         # Initialize
         initialize_directories()
         embedding_model = load_embedding_model()
-        index = load_faiss_index()
+        faiss_index = load_faiss_index()
+
+        # Load or create BM25 index
+        bm25_index = BM25Index()
+        bm25_index.load(settings.bm25_index_path)
 
         # Extract text
         logger.info("Extracting text from PDF...")
@@ -171,7 +264,7 @@ def process_pdf(pdf_path: str) -> bool:
             logger.warning("No text could be extracted from PDF")
             return False
 
-        # Chunk text
+        # Chunk text (semantic or fixed based on config)
         logger.info("Chunking text...")
         chunks = chunk_text(text)
 
@@ -182,11 +275,12 @@ def process_pdf(pdf_path: str) -> bool:
         # Process each chunk
         logger.info(f"Processing {len(chunks)} chunks...")
         chunks_processed = 0
+        new_chunks = []
 
         for i, chunk in enumerate(chunks):
             try:
                 # Save chunk to file
-                chunk_idx = index.ntotal + i
+                chunk_idx = faiss_index.ntotal + i
                 chunk_path = os.path.join(settings.chunks_folder, f"chunk_{chunk_idx}.txt")
 
                 with open(chunk_path, "w", encoding="utf-8") as f:
@@ -195,18 +289,25 @@ def process_pdf(pdf_path: str) -> bool:
                 # Generate and store embedding
                 embedding = embedding_model.encode([chunk])[0]
                 embedding = np.array(embedding, dtype="float32").reshape(1, -1)
-                index.add(embedding)
+                faiss_index.add(embedding)
 
+                new_chunks.append(chunk)
                 chunks_processed += 1
 
             except Exception as e:
                 logger.warning(f"Failed to process chunk {i}: {e}")
                 continue
 
-        # Save updated index
+        # Update BM25 index with new chunks
+        if new_chunks:
+            bm25_index.add_documents(new_chunks)
+            bm25_index.save(settings.bm25_index_path)
+            logger.info(f"Updated BM25 index with {len(new_chunks)} new chunks")
+
+        # Save updated FAISS index
         try:
-            faiss.write_index(index, settings.faiss_index_path)
-            logger.info(f"Saved FAISS index with {index.ntotal} total embeddings")
+            faiss.write_index(faiss_index, settings.faiss_index_path)
+            logger.info(f"Saved FAISS index with {faiss_index.ntotal} total embeddings")
         except Exception as e:
             logger.error(f"Failed to save FAISS index: {e}")
             return False

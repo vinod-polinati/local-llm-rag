@@ -1,10 +1,13 @@
 """
 Streamlit web interface for the M.I.K.E RAG system.
 Provides document upload, retrieval, and AI-powered Q&A functionality.
+Optimized for low latency with caching and hybrid search.
 """
 
 import os
 import shutil
+import subprocess
+import sys
 
 import faiss
 import streamlit as st
@@ -15,6 +18,7 @@ from sentence_transformers import SentenceTransformer
 from config import settings
 from logger import logger
 from validators import validate_file, ValidationError
+from retriever import create_hybrid_retriever, HybridRetriever
 
 
 def initialize_directories() -> None:
@@ -39,15 +43,19 @@ def load_embedding_model() -> SentenceTransformer:
 @st.cache_resource
 def load_llm_chain():
     """Initialize the LLM and prompt chain (cached)."""
-    template = """
-Use the information below to answer the question.
+    template = """You are a helpful AI assistant. Use the following context to answer the question accurately and concisely.
 
-Context: {context}
+Context:
+{context}
 
 Question: {question}
 
-Answer:
-"""
+Instructions:
+- Answer based on the context provided
+- If the context doesn't contain enough information, say so
+- Be concise but thorough
+
+Answer:"""
     try:
         model = OllamaLLM(model=settings.llm_model)
         prompt = ChatPromptTemplate.from_template(template)
@@ -75,6 +83,13 @@ def load_faiss_index() -> faiss.IndexFlatL2:
     return index
 
 
+@st.cache_resource
+def get_retriever(_embedding_model: SentenceTransformer, _index_id: str) -> HybridRetriever:
+    """Get hybrid retriever (cached, invalidated when index changes)."""
+    index = load_faiss_index()
+    return create_hybrid_retriever(_embedding_model, index)
+
+
 def get_unique_filename(directory: str, filename: str) -> str:
     """Ensure unique filenames to avoid overwriting."""
     base, ext = os.path.splitext(filename)
@@ -87,18 +102,7 @@ def get_unique_filename(directory: str, filename: str) -> str:
 
 
 def call_pdf_extract(file_name: str) -> bool:
-    """
-    Call the PDF extraction script and reload FAISS index.
-
-    Args:
-        file_name: Name of the file in the KB folder.
-
-    Returns:
-        True if extraction succeeded, False otherwise.
-    """
-    import subprocess
-    import sys
-
+    """Call the PDF extraction script."""
     script_path = "pdfextrct.py"
     file_path = os.path.join(settings.kb_folder, file_name)
 
@@ -130,31 +134,34 @@ def call_pdf_extract(file_name: str) -> bool:
         return False
 
 
-def retrieve_context(query: str, index: faiss.IndexFlatL2, embedding_model: SentenceTransformer) -> str:
-    """Retrieve the most relevant chunks from FAISS."""
+def retrieve_context(query: str, retriever: HybridRetriever) -> str:
+    """Retrieve the most relevant chunks using hybrid search."""
+    index = load_faiss_index()
     if index.ntotal == 0:
         return "FAISS index is empty. Upload a document first."
 
     try:
-        query_embedding = embedding_model.encode([query])
-        distances, indices = index.search(query_embedding, settings.retrieval_top_k)
+        results = retriever.retrieve(query, top_k=settings.retrieval_top_k)
 
-        if indices[0][0] == -1:
+        if not results:
             return "No relevant context found."
 
+        # Get top chunks after re-ranking
+        top_results = results[:settings.rerank_top_k]
+
         retrieved_chunks = []
-        for idx in indices[0]:
-            if idx != -1:
-                chunk_path = os.path.join(settings.chunks_folder, f"chunk_{idx}.txt")
-                if os.path.exists(chunk_path):
-                    try:
-                        with open(chunk_path, "r", encoding="utf-8") as file:
-                            retrieved_chunks.append(file.read())
-                    except IOError as e:
-                        logger.warning(f"Failed to read chunk {idx}: {e}")
+        for idx, score in top_results:
+            chunk_path = os.path.join(settings.chunks_folder, f"chunk_{idx}.txt")
+            if os.path.exists(chunk_path):
+                try:
+                    with open(chunk_path, "r", encoding="utf-8") as file:
+                        content = file.read()
+                        retrieved_chunks.append(f"[Relevance: {score:.2f}]\n{content}")
+                except IOError as e:
+                    logger.warning(f"Failed to read chunk {idx}: {e}")
 
         logger.debug(f"Retrieved {len(retrieved_chunks)} chunks for query")
-        return "\n\n".join(retrieved_chunks)
+        return "\n\n---\n\n".join(retrieved_chunks)
 
     except Exception as e:
         logger.error(f"Context retrieval error: {e}")
@@ -171,8 +178,9 @@ def clear_kb() -> None:
 
         os.makedirs(settings.kb_folder, exist_ok=True)
 
-        if os.path.exists(settings.faiss_index_path):
-            os.remove(settings.faiss_index_path)
+        for path in [settings.faiss_index_path, settings.bm25_index_path]:
+            if os.path.exists(path):
+                os.remove(path)
 
         logger.info("Knowledge base cleared successfully")
 
@@ -187,7 +195,7 @@ initialize_directories()
 # Streamlit UI Configuration
 st.set_page_config(page_title="📚 M.I.K.E AI Chatbot", layout="centered")
 st.title("- M.I.K.E -")
-st.caption("📖 AI-Powered Document Assistant")
+st.caption("📖 AI-Powered Document Assistant | Hybrid Search Enabled")
 
 # Load models
 try:
@@ -196,8 +204,14 @@ try:
 except Exception:
     st.stop()
 
-# Load FAISS index (not cached - needs to be reloaded after uploads)
+# Load FAISS index and retriever
 index = load_faiss_index()
+# Use index count as cache key to invalidate when documents change
+retriever = get_retriever(embedding_model, f"idx_{index.ntotal}")
+
+# Session state for tracking uploads
+if "upload_count" not in st.session_state:
+    st.session_state.upload_count = 0
 
 # Sidebar
 with st.sidebar:
@@ -212,17 +226,14 @@ with st.sidebar:
 
     if uploaded_file:
         try:
-            # Get file bytes for validation
             file_bytes = uploaded_file.getvalue()
 
-            # Validate file
             validate_file(
                 file_bytes=file_bytes,
                 filename=uploaded_file.name,
                 file_obj=uploaded_file
             )
 
-            # Save file
             file_name = get_unique_filename(settings.kb_folder, uploaded_file.name)
             file_path = os.path.join(settings.kb_folder, file_name)
 
@@ -231,12 +242,12 @@ with st.sidebar:
 
             logger.info(f"File uploaded: {file_name}")
 
-            # Process PDF
-            with st.spinner("Processing document..."):
+            with st.spinner("🔄 Processing document with semantic chunking..."):
                 if call_pdf_extract(file_name):
                     st.success(f"✅ Uploaded and indexed: {file_name}")
-                    # Reload index
-                    index = load_faiss_index()
+                    st.session_state.upload_count += 1
+                    st.cache_resource.clear()  # Clear cache to reload retriever
+                    st.rerun()
                 else:
                     st.error("❌ Failed to process document. Check logs.")
 
@@ -249,10 +260,10 @@ with st.sidebar:
 
     st.divider()
 
-    # Clear button
     if st.button("🧹 Clear All Data", type="secondary"):
         try:
             clear_kb()
+            st.cache_resource.clear()
             st.success("✅ Knowledge base cleared")
             st.rerun()
         except Exception as e:
@@ -260,7 +271,16 @@ with st.sidebar:
 
     st.divider()
 
-    # List uploaded files
+    # Stats
+    st.subheader("📊 Statistics")
+    st.metric("Documents Indexed", index.ntotal)
+
+    cache_stats = retriever.get_cache_stats()
+    if cache_stats:
+        st.metric("Cache Hit Rate", cache_stats["hit_rate"])
+
+    st.divider()
+
     st.subheader("📄 Uploaded Files")
     try:
         files = os.listdir(settings.kb_folder)
@@ -279,16 +299,25 @@ user_question = st.text_input("💬 Ask a question about your documents:", key="
 
 if user_question:
     try:
-        with st.spinner("Thinking..."):
-            context = retrieve_context(user_question, index, embedding_model)
-            result = chain.invoke({"context": context, "question": user_question})
+        col1, col2 = st.columns([1, 1])
 
-            logger.info(f"Query processed: {user_question[:50]}...")
+        with col1:
+            with st.spinner("🔍 Searching with hybrid retrieval..."):
+                context = retrieve_context(user_question, retriever)
+
+        with col2:
+            with st.spinner("🧠 Generating response..."):
+                result = chain.invoke({"context": context, "question": user_question})
+
+        logger.info(f"Query processed: {user_question[:50]}...")
 
         st.success("**Answer:**")
         st.write(result)
 
-        # Save FAISS index
+        # Show retrieved context in expander
+        with st.expander("📝 Retrieved Context"):
+            st.text(context)
+
         try:
             faiss.write_index(index, settings.faiss_index_path)
         except Exception as e:

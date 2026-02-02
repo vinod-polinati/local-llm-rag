@@ -1,6 +1,7 @@
 """
 Main CLI chatbot application for the M.I.K.E RAG system.
 Provides document upload, retrieval, and AI-powered Q&A functionality.
+Optimized for low latency with lazy loading and caching.
 """
 
 import os
@@ -17,6 +18,112 @@ from sentence_transformers import SentenceTransformer
 from config import settings
 from logger import logger
 from validators import validate_file, validate_filename, ValidationError
+from retriever import HybridRetriever, BM25Index, create_hybrid_retriever
+
+
+class ModelManager:
+    """
+    Singleton manager for lazy-loading and caching models.
+    Significantly reduces startup time and memory usage.
+    """
+
+    _instance = None
+    _embedding_model: SentenceTransformer | None = None
+    _llm_chain = None
+    _faiss_index: faiss.IndexFlatL2 | None = None
+    _retriever: HybridRetriever | None = None
+
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+
+    @property
+    def embedding_model(self) -> SentenceTransformer:
+        """Lazy load embedding model."""
+        if self._embedding_model is None:
+            logger.info("Loading embedding model (first use)...")
+            self._embedding_model = SentenceTransformer(settings.embedding_model)
+            logger.info(f"Loaded embedding model: {settings.embedding_model}")
+        return self._embedding_model
+
+    @property
+    def faiss_index(self) -> faiss.IndexFlatL2:
+        """Load or create FAISS index."""
+        if self._faiss_index is None:
+            try:
+                if os.path.exists(settings.faiss_index_path):
+                    self._faiss_index = faiss.read_index(settings.faiss_index_path)
+                    logger.info(f"Loaded FAISS index with {self._faiss_index.ntotal} embeddings")
+                else:
+                    self._faiss_index = faiss.IndexFlatL2(settings.embedding_dimension)
+                    logger.info("Created new FAISS index")
+            except Exception as e:
+                logger.error(f"Failed to load FAISS index: {e}")
+                self._faiss_index = faiss.IndexFlatL2(settings.embedding_dimension)
+        return self._faiss_index
+
+    @faiss_index.setter
+    def faiss_index(self, value: faiss.IndexFlatL2):
+        """Update FAISS index."""
+        self._faiss_index = value
+        # Reset retriever to use new index
+        self._retriever = None
+
+    @property
+    def llm_chain(self):
+        """Lazy load LLM chain (only when first query is made)."""
+        if self._llm_chain is None:
+            logger.info("Initializing LLM (first query)...")
+            template = """You are a helpful AI assistant. Use the following context to answer the question accurately and concisely.
+
+Context:
+{context}
+
+Question: {question}
+
+Instructions:
+- Answer based on the context provided
+- If the context doesn't contain enough information, say so
+- Be concise but thorough
+
+Answer:"""
+            try:
+                model = OllamaLLM(model=settings.llm_model)
+                prompt = ChatPromptTemplate.from_template(template)
+                self._llm_chain = prompt | model
+                logger.info(f"Initialized LLM: {settings.llm_model}")
+            except Exception as e:
+                logger.error(f"Failed to initialize LLM: {e}")
+                raise
+        return self._llm_chain
+
+    @property
+    def retriever(self) -> HybridRetriever:
+        """Get or create hybrid retriever."""
+        if self._retriever is None:
+            self._retriever = create_hybrid_retriever(
+                self.embedding_model,
+                self.faiss_index
+            )
+        return self._retriever
+
+    def reload_index(self):
+        """Reload FAISS index and retriever after document updates."""
+        if os.path.exists(settings.faiss_index_path):
+            self._faiss_index = faiss.read_index(settings.faiss_index_path)
+            self._retriever = None  # Will be recreated on next access
+            logger.info(f"Reloaded FAISS index with {self._faiss_index.ntotal} embeddings")
+
+    def clear(self):
+        """Clear all cached models and indexes."""
+        self._faiss_index = faiss.IndexFlatL2(settings.embedding_dimension)
+        self._retriever = None
+        logger.info("Cleared model manager cache")
+
+
+# Global model manager
+models = ModelManager()
 
 
 def initialize_directories() -> None:
@@ -24,61 +131,6 @@ def initialize_directories() -> None:
     for folder in [settings.kb_folder, settings.chunks_folder, settings.embeddings_folder]:
         os.makedirs(folder, exist_ok=True)
     logger.debug("Initialized required directories")
-
-
-def load_faiss_index() -> faiss.IndexFlatL2:
-    """Load existing FAISS index or create a new one."""
-    try:
-        if os.path.exists(settings.faiss_index_path):
-            index = faiss.read_index(settings.faiss_index_path)
-            logger.info(f"Loaded FAISS index with {index.ntotal} embeddings")
-            return index
-    except Exception as e:
-        logger.error(f"Failed to load FAISS index: {e}")
-
-    index = faiss.IndexFlatL2(settings.embedding_dimension)
-    logger.info("Created new FAISS index")
-    return index
-
-
-def load_embedding_model() -> SentenceTransformer:
-    """Load the sentence transformer embedding model."""
-    try:
-        model = SentenceTransformer(settings.embedding_model)
-        logger.info(f"Loaded embedding model: {settings.embedding_model}")
-        return model
-    except Exception as e:
-        logger.error(f"Failed to load embedding model: {e}")
-        raise
-
-
-def load_llm_chain():
-    """Initialize the LLM and prompt chain."""
-    template = """
-Use the information below to answer the question.
-
-Context: {context}
-
-Question: {question}
-
-Answer:
-"""
-    try:
-        model = OllamaLLM(model=settings.llm_model)
-        prompt = ChatPromptTemplate.from_template(template)
-        chain = prompt | model
-        logger.info(f"Initialized LLM chain with model: {settings.llm_model}")
-        return chain
-    except Exception as e:
-        logger.error(f"Failed to initialize LLM chain: {e}")
-        raise
-
-
-# Initialize components
-initialize_directories()
-embedding_model = load_embedding_model()
-index = load_faiss_index()
-chain = load_llm_chain()
 
 
 def get_unique_filename(directory: str, filename: str) -> str:
@@ -94,7 +146,7 @@ def get_unique_filename(directory: str, filename: str) -> str:
 
 def call_pdf_extract(file_name: str) -> bool:
     """
-    Call the PDF extraction script and reload FAISS index after processing.
+    Call the PDF extraction script and reload indexes after processing.
 
     Args:
         file_name: Name of the file in the KB folder.
@@ -102,7 +154,6 @@ def call_pdf_extract(file_name: str) -> bool:
     Returns:
         True if extraction succeeded, False otherwise.
     """
-    global index
     script_path = "pdfextrct.py"
     file_path = os.path.join(settings.kb_folder, file_name)
 
@@ -125,14 +176,8 @@ def call_pdf_extract(file_name: str) -> bool:
 
         logger.debug(f"Extraction output: {result.stdout}")
 
-        # Reload FAISS index
-        if os.path.exists(settings.faiss_index_path):
-            index = faiss.read_index(settings.faiss_index_path)
-            logger.info(f"Reloaded FAISS index with {index.ntotal} embeddings")
-        else:
-            logger.warning("FAISS index not found after extraction")
-            return False
-
+        # Reload indexes
+        models.reload_index()
         return True
 
     except subprocess.TimeoutExpired:
@@ -143,45 +188,50 @@ def call_pdf_extract(file_name: str) -> bool:
         return False
 
 
-def retrieve_context(query: str, top_k: int | None = None) -> str:
+def retrieve_context(query: str) -> str:
     """
-    Retrieve the most relevant chunks from FAISS.
+    Retrieve the most relevant chunks using hybrid search.
 
     Args:
         query: The search query.
-        top_k: Number of results to retrieve.
 
     Returns:
         Concatenated text from relevant chunks.
     """
-    if top_k is None:
-        top_k = settings.retrieval_top_k
-
-    if index.ntotal == 0:
+    if models.faiss_index.ntotal == 0:
         logger.warning("FAISS index is empty - no documents uploaded")
         return "No documents in the knowledge base. Please upload a document first."
 
     try:
-        query_embedding = embedding_model.encode([query])
-        distances, indices = index.search(query_embedding, top_k)
+        # Use hybrid retriever
+        results = models.retriever.retrieve(query, top_k=settings.retrieval_top_k)
 
-        if indices[0][0] == -1:
+        if not results:
             logger.info("No relevant chunks found for query")
             return "No relevant context found."
 
+        # Get top chunks after re-ranking
+        top_results = results[:settings.rerank_top_k]
+
         retrieved_chunks = []
-        for idx in indices[0]:
-            if idx != -1:
-                chunk_path = os.path.join(settings.chunks_folder, f"chunk_{idx}.txt")
-                if os.path.exists(chunk_path):
-                    try:
-                        with open(chunk_path, "r", encoding="utf-8") as file:
-                            retrieved_chunks.append(file.read())
-                    except IOError as e:
-                        logger.warning(f"Failed to read chunk {idx}: {e}")
+        for idx, score in top_results:
+            chunk_path = os.path.join(settings.chunks_folder, f"chunk_{idx}.txt")
+            if os.path.exists(chunk_path):
+                try:
+                    with open(chunk_path, "r", encoding="utf-8") as file:
+                        content = file.read()
+                        retrieved_chunks.append(f"[Relevance: {score:.2f}]\n{content}")
+                except IOError as e:
+                    logger.warning(f"Failed to read chunk {idx}: {e}")
 
         logger.debug(f"Retrieved {len(retrieved_chunks)} chunks for query")
-        return "\n\n".join(retrieved_chunks)
+
+        # Log cache stats periodically
+        cache_stats = models.retriever.get_cache_stats()
+        if cache_stats:
+            logger.debug(f"Embedding cache: {cache_stats}")
+
+        return "\n\n---\n\n".join(retrieved_chunks)
 
     except Exception as e:
         logger.error(f"Context retrieval error: {e}")
@@ -190,8 +240,6 @@ def retrieve_context(query: str, top_k: int | None = None) -> str:
 
 def clear_kb() -> None:
     """Clear the knowledge base and all extracted files."""
-    global index
-
     try:
         for folder in [settings.kb_folder, settings.chunks_folder, settings.embeddings_folder]:
             if os.path.exists(folder):
@@ -200,10 +248,12 @@ def clear_kb() -> None:
 
         os.makedirs(settings.kb_folder, exist_ok=True)
 
-        index = faiss.IndexFlatL2(settings.embedding_dimension)
+        # Clear indexes
+        models.clear()
 
-        if os.path.exists(settings.faiss_index_path):
-            os.remove(settings.faiss_index_path)
+        for path in [settings.faiss_index_path, settings.bm25_index_path]:
+            if os.path.exists(path):
+                os.remove(path)
 
         logger.info("Knowledge base cleared successfully")
 
@@ -239,6 +289,7 @@ def handle_upload() -> None:
         logger.info(f"File uploaded: {unique_file_name}")
 
         # Process the PDF
+        print("⏳ Processing document...")
         if call_pdf_extract(unique_file_name):
             print("✅ Document processed and indexed.")
         else:
@@ -258,12 +309,15 @@ def handle_upload() -> None:
 def handle_query(user_input: str) -> None:
     """Process a user query and generate response."""
     try:
+        print("🔍 Searching knowledge base...")
         context = retrieve_context(user_input)
-        result = chain.invoke({"context": context, "question": user_input})
-        print("🧠 AI:", result)
+
+        print("🧠 Generating response...")
+        result = models.llm_chain.invoke({"context": context, "question": user_input})
+        print("\n🧠 AI:", result)
 
         # Save FAISS index periodically
-        faiss.write_index(index, settings.faiss_index_path)
+        faiss.write_index(models.faiss_index, settings.faiss_index_path)
 
     except Exception as e:
         print("❌ Error generating response. Please try again.")
@@ -273,8 +327,11 @@ def handle_query(user_input: str) -> None:
 def handle_convo() -> None:
     """Handle the chatbot's main conversation loop."""
     print("🤖 Welcome to M.I.K.E AI ChatBot!")
-    print("   Commands: 'upload' | 'clear' | 'exit'")
+    print("   Commands: 'upload' | 'clear' | 'stats' | 'exit'")
     print("-" * 40)
+
+    # Initialize directories but don't load heavy models yet
+    initialize_directories()
 
     while True:
         try:
@@ -297,6 +354,13 @@ def handle_convo() -> None:
 
             if command == "upload":
                 handle_upload()
+                continue
+
+            if command == "stats":
+                cache_stats = models.retriever.get_cache_stats()
+                print(f"📊 FAISS Index: {models.faiss_index.ntotal} embeddings")
+                if cache_stats:
+                    print(f"📊 Embedding Cache: {cache_stats}")
                 continue
 
             # Regular query

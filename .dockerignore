@@ -1,0 +1,55 @@
+# Git
+.git
+.gitignore
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Test files
+tests/
+pytest.ini
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Environment files (use .env.example)
+.env
+.env.local
+
+# Logs (created at runtime)
+logs/
+*.log
+
+# Data files (mounted as volumes)
+KB/
+split_chunks/
+data_embeddings/
+*.idx
+*.pkl
+
+# Documentation
+*.md
+!README.md
+
+# Sample PDFs
+*.pdf
+
+# macOS
+.DS_Store
+
+# Artifacts folder
+.gemini/

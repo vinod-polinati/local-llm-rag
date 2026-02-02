@@ -21,10 +21,18 @@ class Settings(BaseSettings):
     embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
     embedding_dimension: int = 384
 
+    # Performance Settings
+    enable_embedding_cache: bool = True
+    embedding_cache_size: int = 1000
+    lazy_load_llm: bool = True  # Don't load LLM until first query
+
     # RAG Settings
     chunk_size: int = 500
     chunk_overlap: int = 100
-    retrieval_top_k: int = 3
+    retrieval_top_k: int = 5  # Increased for re-ranking
+    rerank_top_k: int = 3  # Final results after re-ranking
+    use_hybrid_search: bool = True  # Combine BM25 + FAISS
+    hybrid_alpha: float = 0.5  # Balance: 0=BM25 only, 1=FAISS only
 
     # File Settings
     max_file_size_mb: int = 50
@@ -35,6 +43,7 @@ class Settings(BaseSettings):
     chunks_folder: str = "split_chunks"
     embeddings_folder: str = "data_embeddings"
     faiss_index_path: str = "faiss_index.idx"
+    bm25_index_path: str = "bm25_index.pkl"
     log_folder: str = "logs"
 
     # Logging
@@ -43,6 +52,7 @@ class Settings(BaseSettings):
 
     # Processing
     pdf_extraction_timeout: int = 300  # seconds
+    use_semantic_chunking: bool = True  # Sentence-aware chunking
 
     @property
     def max_file_size_bytes(self) -> int:
