@@ -76,7 +76,7 @@ def validate_file_type(file_path: str | None = None, file_bytes: bytes | None = 
         raise ValidationError("Either file_path or file_bytes must be provided")
 
     if not header.startswith(PDF_MAGIC):
-        logger.warning(f"File type validation failed: not a valid PDF file")
+        logger.warning("File type validation failed: not a valid PDF file")
         raise ValidationError("Invalid file type. Only PDF files are allowed.")
 
     logger.debug("File type validation passed: valid PDF")

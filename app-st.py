@@ -64,7 +64,7 @@ Answer:"""
         return chain
     except Exception as e:
         logger.error(f"Failed to initialize LLM chain: {e}")
-        st.error(f"Failed to connect to Ollama. Is it running?")
+        st.error("Failed to connect to Ollama. Is it running?")
         raise
 
 
